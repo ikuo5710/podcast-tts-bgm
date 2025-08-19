@@ -1,0 +1,6 @@
+dist/
+inputs/
+node_modules/
+outputs/
+.env
+AGENTS.md

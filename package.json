@@ -1,0 +1,39 @@
+{
+  "name": "bulk-tts-processor",
+  "version": "1.0.0",
+  "description": "A tool to convert text files to podcast audio with BGM in bulk.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "ts-node src/index.ts",
+    "prod": "npm run build && node dist/index.js"
+  },
+  "keywords": [
+    "tts",
+    "podcast",
+    "gemini",
+    "graphai"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/ffprobe-static": "^2.0.3",
+    "@types/fluent-ffmpeg": "^2.1.24",
+    "@types/node": "^20.11.24",
+    "@types/wav": "^1.0.4",
+    "@types/yargs": "^17.0.32",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@google/genai": "^1.13.0",
+    "@graphai/agents": "^2.0.7",
+    "dotenv": "^16.4.5",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
+    "fluent-ffmpeg": "^2.1.2",
+    "graphai": "^2.0.13",
+    "wav": "^1.0.2",
+    "yargs": "^17.7.2"
+  }
+}
