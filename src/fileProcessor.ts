@@ -5,7 +5,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 
 // GraphAIの並列実行数を設定。APIのレートリミットやマシンスペックに応じて調整します。
-const CONCURRENCY = 5;
+const CONCURRENCY = 10;
 
 /**
  * 指定されたディレクトリ内の全テキストファイルを対象に、
