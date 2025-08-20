@@ -166,8 +166,9 @@ export const mixBgmAgent: AgentFunctionInfo = {
 
       const filter = [
         // Voice: 正規化→分岐（mix用/サイドチェイン用）→ mix用だけTSを0始まりに
-        '[0:a]loudnorm=I=-16:TP=-1.5:LRA=11,asplit=2[voice_mix_raw][voice_key]',
+        '[0:a]loudnorm=I=-16:TP=-1.5:LRA=11,asplit=2[voice_mix_raw][voice_key_raw]',
         '[voice_mix_raw]asetpts=PTS-STARTPTS[voice_mix]',
+        '[voice_key_raw]asetpts=PTS-STARTPTS[voice_key]',
 
         // BGM: INフェード→TSを0始まり→サイドチェイン圧縮
         '[1:a]volume=0.18,afade=t=in:st=0:d=2,asetpts=PTS-STARTPTS[bgm0]',
