@@ -17,7 +17,10 @@ if (!apiKey) {
   throw new Error('GEMINI_API_KEY is not set in the environment variables.');
 }
 const genAI = new GoogleGenAI({ apiKey });
-const ttsModel = process.env.TTS_MODEL || 'gemini-2.5-pro-preview-tts';
+const ttsModel = process.env.TTS_MODEL || 'gemini-3.8-flash-tts';
+const ttsVoice = process.env.TTS_VOICE || 'Orus';
+// Gemini 3.x TTS は本文を逐語で読み上げるため、話し方の指示は speechMetadata 側に渡す
+const ttsStyle = process.env.TTS_STYLE || '自然で聞きやすいポッドキャスト風の、落ち着いた話し方';
 
 async function saveWaveFile(
   filename: string,
@@ -63,33 +66,44 @@ export const ttsAgent: AgentFunctionInfo = {
     console.log(`[TTS] Starting: ${path.basename(textFilePath)}`);
 
     const textContent = await fs.readFile(textFilePath, 'utf-8');
-    const prompt = `以下の日本語テキストを、自然で聞きやすいポッドキャスト風の話し方で読み上げてください。
-
----
-${textContent}`;
 
     const result = await genAI.models.generateContent({
       model: ttsModel,
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: [
+        {
+          parts: [
+            {
+              // 本文のみを渡す。指示文を混ぜると Gemini 3.x ではそのまま読み上げられる
+              text: textContent,
+              speechMetadata: { style: ttsStyle },
+            },
+          ],
+        },
+      ],
       config: {
         responseModalities: ['AUDIO'],
         speechConfig: {
           voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: 'Orus' },
+            prebuiltVoiceConfig: { voiceName: ttsVoice },
           },
         },
       },
     });
 
-    const audioData = result.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!audioData) {
+    const inlineData = result.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+    if (!inlineData?.data) {
       throw new Error(`[TTS] Failed to get audio data for ${textFilePath}`);
     }
 
-    const audioBuffer = Buffer.from(audioData, 'base64');
+    const audioBuffer = Buffer.from(inlineData.data, 'base64');
     const tempWavPath = path.join(outputDir, `temp_${path.basename(textFilePath, '.txt')}.wav`);
-    await saveWaveFile(tempWavPath, audioBuffer);
-    //await fs.writeFile(tempWavPath, audioBuffer);
+    // Gemini 3.x は RIFF ヘッダ付きの audio/wav を返すのでそのまま書き出す。
+    // 2.5 系はヘッダなしの raw PCM (audio/l16) なので WAV ヘッダを付与する。
+    if (inlineData.mimeType?.startsWith('audio/wav')) {
+      await fs.writeFile(tempWavPath, audioBuffer);
+    } else {
+      await saveWaveFile(tempWavPath, audioBuffer);
+    }
 
     console.log(`[TTS] Completed: ${path.basename(tempWavPath)}`);
     return tempWavPath;
