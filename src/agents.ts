@@ -6,6 +6,9 @@ import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
 import ffprobeStatic from 'ffprobe-static';
 import wav from 'wav';
+import { normalizeForTts } from './text-normalizer';
+import { splitIntoChunks } from './text-chunker';
+import { concatPcm, parseWav, PcmAudio } from './wav-pcm';
 
 // Setup ffmpeg
 ffmpeg.setFfmpegPath(ffmpegPath as string);
@@ -54,56 +57,82 @@ const ffprobePromise = (filePath: string): Promise<ffmpeg.FfprobeData> => {
   });
 };
 
+// 1チャンクあたりの最大試行回数と、段落間に挟む無音の長さ
+const TTS_MAX_ATTEMPTS = 3;
+const PARAGRAPH_GAP_SECONDS = 0.6;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 1チャンクを TTS にかけて PCM を返す。失敗時は待ってから再試行する */
+async function synthesizeChunk(text: string, label: string): Promise<PcmAudio> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const result = await genAI.models.generateContent({
+        model: ttsModel,
+        contents: [
+          {
+            parts: [
+              {
+                // 本文のみを渡す。指示文を混ぜると Gemini 3.x ではそのまま読み上げられる
+                text,
+                speechMetadata: { style: ttsStyle },
+              },
+            ],
+          },
+        ],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: ttsVoice },
+            },
+          },
+        },
+      });
+
+      const inlineData = result.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+      if (!inlineData?.data) {
+        throw new Error(`[TTS] Failed to get audio data for ${label}`);
+      }
+      const audioBuffer = Buffer.from(inlineData.data, 'base64');
+      // Gemini 3.x は RIFF ヘッダ付きの audio/wav、2.5 系はヘッダなしの raw PCM (audio/l16, 24kHz mono)
+      return inlineData.mimeType?.startsWith('audio/wav')
+        ? parseWav(audioBuffer)
+        : { pcm: audioBuffer, channels: 1, sampleRate: 24000, bitDepth: 16 };
+    } catch (err) {
+      if (attempt >= TTS_MAX_ATTEMPTS) throw err;
+      const waitMs = 2000 * 2 ** (attempt - 1);
+      console.warn(`[TTS] Retry ${attempt}/${TTS_MAX_ATTEMPTS - 1} for ${label} in ${waitMs}ms: ${(err as Error).message}`);
+      await sleep(waitMs);
+    }
+  }
+}
+
 /**
  * Agent to convert a text file to speech using Gemini TTS.
- * It produces a temporary WAV file.
+ * The text is synthesized paragraph by paragraph and joined into a temporary WAV file.
  */
 export const ttsAgent: AgentFunctionInfo = {
   name: 'ttsAgent',
   agent: async ({ namedInputs }) => {
     const { textFilePath, outputDir } = namedInputs as { textFilePath: string; outputDir: string };
+    const baseName = path.basename(textFilePath, '.txt');
 
-    console.log(`[TTS] Starting: ${path.basename(textFilePath)}`);
+    const textContent = normalizeForTts(await fs.readFile(textFilePath, 'utf-8'));
+    const chunks = splitIntoChunks(textContent);
+    console.log(`[TTS] Starting: ${path.basename(textFilePath)} (${chunks.length} chunks)`);
 
-    const textContent = await fs.readFile(textFilePath, 'utf-8');
-
-    const result = await genAI.models.generateContent({
-      model: ttsModel,
-      contents: [
-        {
-          parts: [
-            {
-              // 本文のみを渡す。指示文を混ぜると Gemini 3.x ではそのまま読み上げられる
-              text: textContent,
-              speechMetadata: { style: ttsStyle },
-            },
-          ],
-        },
-      ],
-      config: {
-        responseModalities: ['AUDIO'],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: ttsVoice },
-          },
-        },
-      },
-    });
-
-    const inlineData = result.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-    if (!inlineData?.data) {
-      throw new Error(`[TTS] Failed to get audio data for ${textFilePath}`);
+    // レート制限を避けるため、1ファイル内のチャンクは順番に処理する
+    const parts: PcmAudio[] = [];
+    for (const [i, chunk] of chunks.entries()) {
+      const label = `${baseName} [${i + 1}/${chunks.length}]`;
+      parts.push(await synthesizeChunk(chunk, label));
+      console.log(`[TTS] Chunk done: ${label}`);
     }
 
-    const audioBuffer = Buffer.from(inlineData.data, 'base64');
-    const tempWavPath = path.join(outputDir, `temp_${path.basename(textFilePath, '.txt')}.wav`);
-    // Gemini 3.x は RIFF ヘッダ付きの audio/wav を返すのでそのまま書き出す。
-    // 2.5 系はヘッダなしの raw PCM (audio/l16) なので WAV ヘッダを付与する。
-    if (inlineData.mimeType?.startsWith('audio/wav')) {
-      await fs.writeFile(tempWavPath, audioBuffer);
-    } else {
-      await saveWaveFile(tempWavPath, audioBuffer);
-    }
+    const merged = concatPcm(parts, PARAGRAPH_GAP_SECONDS);
+    const tempWavPath = path.join(outputDir, `temp_${baseName}.wav`);
+    await saveWaveFile(tempWavPath, merged.pcm, merged.channels, merged.sampleRate, merged.bitDepth / 8);
 
     console.log(`[TTS] Completed: ${path.basename(tempWavPath)}`);
     return tempWavPath;
@@ -118,7 +147,7 @@ export const ttsAgent: AgentFunctionInfo = {
   },
   output: { type: 'string', description: 'Path to the generated temporary WAV file' },
   samples: [],
-  description: 'Converts a text file to speech using Gemini TTS and saves it as a temporary WAV file.',
+  description: 'Converts a text file to speech paragraph by paragraph using Gemini TTS and saves it as a temporary WAV file.',
   category: ['tts', 'google'],
   author: 'Gemini',
   repository: 'n/a',

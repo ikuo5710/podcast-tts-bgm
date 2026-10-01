@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "start": "ts-node src/index.ts",
-    "prod": "npm run build && node dist/index.js"
+    "prod": "npm run build && node dist/index.js",
+    "test": "node --require ts-node/register --test tests/*.spec.ts"
   },
   "keywords": [
     "tts",
